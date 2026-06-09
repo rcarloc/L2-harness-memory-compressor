@@ -1,0 +1,4 @@
+{"timestamp":"2026-06-09T00:00:00.000Z","type":"session_meta","payload":{"id":"sample-public-session","timestamp":"2026-06-09T00:00:00.000Z","cwd":"C:\\demo","originator":"sample"}}
+{"timestamp":"2026-06-09T00:00:01.000Z","type":"event_msg","payload":{"type":"user_message","message":"Compress this session for durable handoff.","images":[]}}
+{"timestamp":"2026-06-09T00:00:02.000Z","type":"event_msg","payload":{"type":"agent_message","message":"Final state: sample compression context is ready. Next action: run the public tests.","phase":"final"}}
+{"timestamp":"2026-06-09T00:00:03.000Z","type":"turn_context","payload":{"turn_id":"sample-turn","cwd":"C:\\demo","model":"gpt-5","summary":"sample turn"}}
