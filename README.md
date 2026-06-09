@@ -10,6 +10,21 @@ It turns a large Codex JSONL rollout into a validated compressed handoff bundle 
 
 The `compacted.payload.replacement_history` field carries a raw Codex `ResponseItem` message. That is the important resume anchor.
 
+## Why This Matters
+
+Long Codex sessions can keep feeding large prior context into every new turn. That raises per-turn input-token cost even when the user only asks a small follow-up question.
+
+In one controlled local test, this compressor preserved answer quality while cutting per-turn input roughly in half:
+
+| Variant | Rollout | Quality score | Input tokens across 3 prompts | Uncached input tokens | Notes |
+|---|---:|---:|---:|---:|---|
+| Raw control | 10.56 MB | `15/15` | `398,997` | `384,021` | Existing long Codex session with 8 native compacted events |
+| External compressed | 292 KB | `15/15` | `198,102` | `183,126` | Generated handoff context plus compressed rollout |
+
+Compression pipeline time was about `177s`. The output/reasoning cost was effectively the same; the savings came from carrying less old context into each future turn.
+
+Measurement note: use Codex `last_token_usage` for per-prompt cost. Cumulative historical session totals are useful for accounting, but they do not answer how much one new prompt cost.
+
 ## Quickstart
 
 ```powershell
@@ -66,7 +81,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\Run-All.ps1
 
 Tests cover provider JSON extraction, dry-run provider config, chunk/final digest behavior, compressed rollout shape, no-BOM output, and the public entrypoint.
 
-## Benchmark Note
+## Benchmark Details
 
 Recent local benchmark, recorded as documentation only:
 
@@ -74,6 +89,8 @@ Recent local benchmark, recorded as documentation only:
 - Raw and compressed both scored `15/15`.
 - Raw control input tokens across 3 prompts: `398,997`.
 - External compressed input tokens across 3 prompts: `198,102`.
+- Raw control uncached input tokens: `384,021`.
+- External compressed uncached input tokens: `183,126`.
 - Pipeline time: about `177s`.
 
-Use `last_token_usage` for per-prompt cost. Cumulative session totals are not the right measure for one answer.
+Source report: `docs/benchmark-019e09f5.md`.
