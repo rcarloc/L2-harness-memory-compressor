@@ -139,7 +139,10 @@ The hook is intentionally small and non-blocking:
 - appends one observation to `runs/token-monitor/hooks/events.jsonl`;
 - updates `runs/token-monitor/hooks/current.json` for dashboard-style reads;
 - logs hook failures to `runs/token-monitor/hooks/hook-errors.jsonl`;
+- stores a byte offset in `current.json` so later turns read only appended rollout records;
 - always returns valid JSON with `continue=true`.
+
+The first hook run for a session uses a full parse to establish baseline state. Later runs use incremental reads when the transcript path and byte offset still match, which keeps the hook much lighter than polling large rollouts.
 
 Windows hook command example:
 

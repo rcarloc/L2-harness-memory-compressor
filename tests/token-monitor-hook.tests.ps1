@@ -19,6 +19,12 @@ function Write-TestRollout {
     [System.IO.File]::WriteAllText($Path, (($lines -join [Environment]::NewLine) + [Environment]::NewLine), $encoding)
 }
 
+function Add-TestLine {
+    param([string]$Path, [string]$Line)
+    $encoding = New-Object System.Text.UTF8Encoding($false)
+    [System.IO.File]::AppendAllText($Path, ($Line + [Environment]::NewLine), $encoding)
+}
+
 function Invoke-Hook {
     param([string]$InputJson, [string]$OutRoot)
     $script = Join-Path $RepoRoot 'Invoke-CodexTokenMonitorHook.ps1'
@@ -66,6 +72,19 @@ try {
     $current = Get-Content -LiteralPath $currentPath -Raw | ConvertFrom-Json
     Assert-True ($current.sessions.$sessionId.session_id -eq $sessionId) 'current.json should index latest state by session id'
     Assert-True ($current.sessions.$sessionId.latest_usage.input_tokens -eq 64000) 'current.json should include latest usage'
+    Assert-True ($current.sessions.$sessionId.byte_offset -gt 0) 'current.json should include byte offset for incremental hook reads'
+    $firstOffset = [int64]$current.sessions.$sessionId.byte_offset
+
+    $nextTokenLine = '{"timestamp":"2026-06-10T00:00:04.000Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":33000,"cached_input_tokens":24000,"output_tokens":120,"reasoning_output_tokens":10,"total_tokens":33120},"model_context_window":200000}}}'
+    Add-TestLine -Path $source -Line $nextTokenLine
+    [void](Invoke-Hook -InputJson $stopInput -OutRoot $outRoot)
+    $events = @(Get-Content -LiteralPath $eventsPath | ForEach-Object { $_ | ConvertFrom-Json })
+    Assert-True ($events[-1].latest_usage.input_tokens -eq 33000) 'Second hook run should read appended token usage'
+    Assert-True ($events[-1].read_mode -eq 'incremental') 'Second hook run should use incremental read mode'
+    Assert-True ($events[-1].bytes_scanned -lt $firstOffset) 'Incremental run should scan fewer bytes than the original file prefix'
+    $current = Get-Content -LiteralPath $currentPath -Raw | ConvertFrom-Json
+    Assert-True ($current.sessions.$sessionId.latest_usage.input_tokens -eq 33000) 'current.json should update latest usage from incremental read'
+    Assert-True ($current.sessions.$sessionId.byte_offset -gt $firstOffset) 'current.json should advance byte offset after incremental read'
 
     $secondSession = 'hook-second-session'
     $secondSource = Join-Path $root 'rollout-hook-second-session.jsonl'
@@ -90,7 +109,7 @@ try {
     $stdout = Invoke-Hook -InputJson $nonStopInput -OutRoot $outRoot
     Assert-True ((($stdout | ConvertFrom-Json).continue) -eq $true) 'Non-Stop hook should still continue'
     $eventsAfterNonStop = @(Get-Content -LiteralPath $eventsPath | ForEach-Object { $_ | ConvertFrom-Json })
-    Assert-True ($eventsAfterNonStop.Count -eq 2) 'Non-Stop hook should not append token observations'
+    Assert-True ($eventsAfterNonStop.Count -eq 3) 'Non-Stop hook should not append token observations'
 
     $missingTranscriptInput = @{
         hook_event_name = 'Stop'

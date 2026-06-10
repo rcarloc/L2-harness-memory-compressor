@@ -58,6 +58,155 @@ function Get-ExistingSessions {
     return $sessions
 }
 
+function Get-TokenStatus {
+    param([Nullable[Int64]]$InputTokens)
+    if ($null -eq $InputTokens) { return 'unknown' }
+    if ($InputTokens -lt 35000) { return 'strong' }
+    if ($InputTokens -lt 60000) { return 'pass' }
+    if ($InputTokens -le 100000) { return 'warn' }
+    return 'fail'
+}
+
+function Get-UsageFingerprint {
+    param([object]$Usage, [object]$ContextWindow)
+    if ($null -eq $Usage) { return '' }
+    $parts = @(
+        [string]$Usage.input_tokens,
+        [string]$Usage.cached_input_tokens,
+        [string]$Usage.output_tokens,
+        [string]$Usage.reasoning_output_tokens,
+        [string]$Usage.total_tokens,
+        [string]$ContextWindow
+    )
+    return ($parts -join '|')
+}
+
+function Convert-Usage {
+    param([object]$Usage, [object]$ContextWindow)
+    if ($null -eq $Usage) { return $null }
+
+    $inputTokens = if ($null -ne $Usage.input_tokens) { [int64]$Usage.input_tokens } else { $null }
+    $cachedTokens = if ($null -ne $Usage.cached_input_tokens) { [int64]$Usage.cached_input_tokens } else { $null }
+    $uncachedTokens = $null
+    if ($null -ne $inputTokens -and $null -ne $cachedTokens) {
+        $uncachedTokens = [int64]([math]::Max(0, $inputTokens - $cachedTokens))
+    }
+
+    $window = if ($null -ne $ContextWindow) { [int64]$ContextWindow } else { $null }
+    $pressure = $null
+    if ($null -ne $inputTokens -and $null -ne $window -and $window -gt 0) {
+        $pressure = [math]::Round(([double]$inputTokens / [double]$window) * 100, 2)
+    }
+
+    [ordered]@{
+        input_tokens = $inputTokens
+        cached_input_tokens = $cachedTokens
+        uncached_input_tokens = $uncachedTokens
+        output_tokens = if ($null -ne $Usage.output_tokens) { [int64]$Usage.output_tokens } else { $null }
+        reasoning_output_tokens = if ($null -ne $Usage.reasoning_output_tokens) { [int64]$Usage.reasoning_output_tokens } else { $null }
+        total_tokens = if ($null -ne $Usage.total_tokens) { [int64]$Usage.total_tokens } else { $null }
+        model_context_window = $window
+        context_pressure_pct = $pressure
+        status = Get-TokenStatus -InputTokens $inputTokens
+    }
+}
+
+function Get-Recommendation {
+    param([object]$Usage, [int64]$SizeBytes, [int64]$CompactedCount)
+    if ($null -eq $Usage) { return 'no token data available yet' }
+    $status = [string]$Usage.status
+    if ($status -eq 'fail' -and ($SizeBytes -ge (3 * 1024 * 1024) -or $CompactedCount -ge 2)) {
+        return 'consider compression'
+    }
+    if ($status -eq 'fail') {
+        return 'monitor one more turn or compress if continuing'
+    }
+    if ($status -eq 'warn') {
+        return 'monitor next turn'
+    }
+    return 'no compression needed'
+}
+
+function Read-IncrementalTokenUsage {
+    param(
+        [string]$Path,
+        [int64]$StartByteOffset,
+        [object]$Previous
+    )
+
+    $fileInfo = Get-Item -LiteralPath $Path
+    $recordCount = if ($Previous.record_count) { [int64]$Previous.record_count } else { 0 }
+    $compactedCount = if ($Previous.compacted_count) { [int64]$Previous.compacted_count } else { 0 }
+    $tokenEventCount = if ($Previous.token_event_count) { [int64]$Previous.token_event_count } else { 0 }
+    $uniqueTokenEventCount = if ($Previous.unique_token_event_count) { [int64]$Previous.unique_token_event_count } else { 0 }
+    $lastFingerprint = if ($Previous.last_fingerprint) { [string]$Previous.last_fingerprint } else { '' }
+    $latestUsage = $Previous.latest_usage
+    $latestEvent = [ordered]@{
+        line = $null
+        timestamp = $null
+        fingerprint = $lastFingerprint
+        usage = $latestUsage
+    }
+
+    $stream = [System.IO.File]::Open($Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+    try {
+        [void]$stream.Seek($StartByteOffset, [System.IO.SeekOrigin]::Begin)
+        $reader = New-Object System.IO.StreamReader($stream, [System.Text.Encoding]::UTF8, $true)
+        try {
+            while (($line = $reader.ReadLine()) -ne $null) {
+                if ([string]::IsNullOrWhiteSpace($line)) { continue }
+                $recordCount++
+                try { $obj = $line | ConvertFrom-Json } catch { continue }
+                $type = if ($obj.type) { [string]$obj.type } else { 'unknown' }
+                if ($type -eq 'compacted') {
+                    $compactedCount++
+                }
+                if ($type -eq 'event_msg' -and $obj.payload.type -eq 'token_count') {
+                    $info = $obj.payload.info
+                    $usage = Convert-Usage -Usage $info.last_token_usage -ContextWindow $info.model_context_window
+                    $fingerprint = Get-UsageFingerprint -Usage $info.last_token_usage -ContextWindow $info.model_context_window
+                    $tokenEventCount++
+                    if (-not [string]::IsNullOrWhiteSpace($fingerprint) -and $fingerprint -ne $lastFingerprint) {
+                        $uniqueTokenEventCount++
+                        $lastFingerprint = $fingerprint
+                    }
+                    $latestUsage = $usage
+                    $latestEvent = [ordered]@{
+                        line = $recordCount
+                        timestamp = [string]$obj.timestamp
+                        fingerprint = $fingerprint
+                        usage = $usage
+                    }
+                }
+            }
+        }
+        finally {
+            $reader.Close()
+        }
+    }
+    finally {
+        $stream.Close()
+    }
+
+    [pscustomobject]@{
+        path = $Path
+        session_id = [string]$Previous.session_id
+        size_bytes = [int64]$fileInfo.Length
+        size_mb = [math]::Round(([double]$fileInfo.Length / 1MB), 3)
+        record_count = $recordCount
+        compacted_count = $compactedCount
+        compressed_only_shape = [bool]$Previous.compressed_only_shape
+        token_event_count = $tokenEventCount
+        unique_token_event_count = $uniqueTokenEventCount
+        latest_token_event = $latestEvent
+        recommendation = Get-Recommendation -Usage $latestUsage -SizeBytes ([int64]$fileInfo.Length) -CompactedCount $compactedCount
+        read_mode = 'incremental'
+        bytes_scanned = [int64]([math]::Max(0, ([int64]$fileInfo.Length - $StartByteOffset)))
+        byte_offset = [int64]$fileInfo.Length
+        last_fingerprint = $lastFingerprint
+    }
+}
+
 function Write-CurrentSnapshot {
     param([object]$Event)
     $currentPath = Join-Path $OutRoot 'current.json'
@@ -68,6 +217,16 @@ function Write-CurrentSnapshot {
         transcript_path = $Event.transcript_path
         latest_usage = $Event.latest_usage
         size_bytes = $Event.size_bytes
+        size_mb = $Event.size_mb
+        record_count = $Event.record_count
+        compacted_count = $Event.compacted_count
+        compressed_only_shape = $Event.compressed_only_shape
+        token_event_count = $Event.token_event_count
+        unique_token_event_count = $Event.unique_token_event_count
+        byte_offset = $Event.byte_offset
+        last_fingerprint = $Event.last_fingerprint
+        read_mode = $Event.read_mode
+        bytes_scanned = $Event.bytes_scanned
         recommendation = $Event.recommendation
         updated_at = $Event.captured_at
     }
@@ -112,7 +271,22 @@ try {
     }
 
     $resolvedTranscript = (Resolve-Path -LiteralPath ([string]$hookInput.transcript_path)).Path
-    $analysis = & (Join-Path $ScriptRoot 'src\Read-CodexTokenUsage.ps1') -SourcePath $resolvedTranscript
+    $currentPath = Join-Path $OutRoot 'current.json'
+    $sessions = Get-ExistingSessions -CurrentPath $currentPath
+    $priorSessionId = if ($hookInput.session_id) { [string]$hookInput.session_id } else { '' }
+    $prior = if (-not [string]::IsNullOrWhiteSpace($priorSessionId) -and $sessions.Contains($priorSessionId)) { $sessions[$priorSessionId] } else { $null }
+    $fileInfo = Get-Item -LiteralPath $resolvedTranscript
+
+    if ($prior -and [string]$prior.transcript_path -eq $resolvedTranscript -and $prior.byte_offset -and [int64]$prior.byte_offset -le [int64]$fileInfo.Length) {
+        $analysis = Read-IncrementalTokenUsage -Path $resolvedTranscript -StartByteOffset ([int64]$prior.byte_offset) -Previous $prior
+    } else {
+        $analysis = & (Join-Path $ScriptRoot 'src\Read-CodexTokenUsage.ps1') -SourcePath $resolvedTranscript
+        $analysis | Add-Member -NotePropertyName read_mode -NotePropertyValue 'full' -Force
+        $analysis | Add-Member -NotePropertyName bytes_scanned -NotePropertyValue ([int64]$analysis.size_bytes) -Force
+        $analysis | Add-Member -NotePropertyName byte_offset -NotePropertyValue ([int64]$analysis.size_bytes) -Force
+        $lastFingerprint = if ($analysis.latest_token_event) { [string]$analysis.latest_token_event.fingerprint } else { '' }
+        $analysis | Add-Member -NotePropertyName last_fingerprint -NotePropertyValue $lastFingerprint -Force
+    }
     $latestUsage = if ($analysis.latest_token_event) { $analysis.latest_token_event.usage } else { $null }
     $eventSessionId = if ($hookInput.session_id) { [string]$hookInput.session_id } elseif ($analysis.session_id) { [string]$analysis.session_id } else { 'unknown-session' }
 
@@ -130,6 +304,10 @@ try {
         compressed_only_shape = $analysis.compressed_only_shape
         token_event_count = $analysis.token_event_count
         unique_token_event_count = $analysis.unique_token_event_count
+        read_mode = $analysis.read_mode
+        bytes_scanned = $analysis.bytes_scanned
+        byte_offset = $analysis.byte_offset
+        last_fingerprint = $analysis.last_fingerprint
         recommendation = $analysis.recommendation
     }
 

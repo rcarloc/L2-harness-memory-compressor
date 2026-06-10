@@ -67,19 +67,55 @@ try {
     $watchSource = Join-Path $root 'watch-rollout.jsonl'
     Write-TestRollout -Path $watchSource -SessionId 'watch-session' -ExtraLines @($tokenA)
     $watchOut = Join-Path $root 'watch-runs'
-    $job = Start-Job -ScriptBlock {
-        param($RepoRootArg, $SourceArg, $OutArg)
-        & (Join-Path $RepoRootArg 'Measure-CodexSessionTokens.ps1') -SourcePath $SourceArg -Watch -Minutes 0.2 -IntervalSeconds 1 -StableSeconds 1 -OutRoot $OutArg
-    } -ArgumentList $RepoRoot, $watchSource, $watchOut
-    Start-Sleep -Seconds 2
+    $watchStdout = Join-Path $root 'watch-stdout.txt'
+    $watchStderr = Join-Path $root 'watch-stderr.txt'
+    $monitorScript = Join-Path $RepoRoot 'Measure-CodexSessionTokens.ps1'
+    $processArgs = @(
+        '-NoProfile',
+        '-ExecutionPolicy', 'Bypass',
+        '-File', ('"' + $monitorScript + '"'),
+        '-SourcePath', ('"' + $watchSource + '"'),
+        '-Watch',
+        '-Minutes', '0.2',
+        '-IntervalSeconds', '1',
+        '-StableSeconds', '1',
+        '-OutRoot', ('"' + $watchOut + '"')
+    ) -join ' '
+    $process = Start-Process -FilePath 'powershell.exe' -ArgumentList $processArgs -RedirectStandardOutput $watchStdout -RedirectStandardError $watchStderr -WindowStyle Hidden -PassThru
+    $baselineSeen = $false
+    $baselineDeadline = (Get-Date).AddSeconds(20)
+    while ((Get-Date) -lt $baselineDeadline) {
+        $observationFiles = @(Get-ChildItem -LiteralPath $watchOut -Recurse -File -Filter 'observations.jsonl' -ErrorAction SilentlyContinue)
+        foreach ($observationFile in $observationFiles) {
+            if ((Get-Content -LiteralPath $observationFile.FullName -ErrorAction SilentlyContinue | Select-String -SimpleMatch '"kind":"baseline"')) {
+                $baselineSeen = $true
+                break
+            }
+        }
+        if ($baselineSeen) { break }
+        Start-Sleep -Milliseconds 250
+    }
+    Assert-True $baselineSeen 'Watch monitor should write baseline before test appends next token event'
     Add-Content -LiteralPath $watchSource -Value $tokenB
-    Wait-Job $job -Timeout 30 | Out-Null
-    Assert-True ($job.State -eq 'Completed') 'Watch monitor job should complete'
-    $watchResult = Receive-Job $job
-    Remove-Job $job
+    $completed = $process.WaitForExit(30000)
+    if (-not $completed) {
+        try { $process.Kill() } catch {}
+    }
+    Assert-True $completed 'Watch monitor process should complete'
+    $process.WaitForExit()
+    $process.Refresh()
+    $stderrText = Get-Content -LiteralPath $watchStderr -Raw -ErrorAction SilentlyContinue
+    Assert-True ([string]::IsNullOrWhiteSpace($stderrText)) ('Watch monitor process should not write stderr: ' + $stderrText)
+    $process.Dispose()
+    $summaryFiles = @(Get-ChildItem -LiteralPath $watchOut -Recurse -File -Filter 'summary.json' -ErrorAction SilentlyContinue | Sort-Object LastWriteTime -Descending)
+    Assert-True ($summaryFiles.Count -gt 0) 'Watch monitor should write summary.json'
+    $summary = Get-Content -LiteralPath $summaryFiles[0].FullName -Raw | ConvertFrom-Json
+    $watchResult = [pscustomobject]@{
+        found_next_turn = $summary.watch.found_next_turn
+        summary = $summaryFiles[0].FullName
+    }
     Assert-True ($watchResult.found_next_turn -eq $true) 'Watch monitor should find next unique token event'
     Assert-True (Test-Path -LiteralPath $watchResult.summary) 'Watch monitor should write summary.json'
-    $summary = Get-Content -LiteralPath $watchResult.summary -Raw | ConvertFrom-Json
     Assert-True ($summary.watch.found_next_turn -eq $true) 'summary.json should record found_next_turn'
     Assert-True ($summary.baseline.latest_usage.input_tokens -eq 50000) 'summary.json should record baseline usage'
     Assert-True ($summary.next_turn.latest_usage.input_tokens -eq 120000) 'summary.json should record next-turn usage'
