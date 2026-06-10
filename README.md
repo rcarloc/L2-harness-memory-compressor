@@ -92,6 +92,85 @@ A compression run is usable only when:
 - `compressed-rollout.jsonl` validates as exactly `session_meta`, `compacted`, `turn_context`;
 - the final report states session id, source size, provider/model, duration, chunk count, validation result, evidence folder, whether live rollout was touched, and next recommended action.
 
+## Token Monitoring
+
+Use `Measure-CodexSessionTokens.ps1` to inspect latest and next-turn token usage from local Codex JSONL rollout files. It is local-file based only: no paid observability service, billing API, proxy, or network dependency is required.
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Measure-CodexSessionTokens.ps1 `
+  -SourcePath .\examples\sample-rollout.jsonl
+```
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Measure-CodexSessionTokens.ps1 `
+  -SessionId <session-id> `
+  -SessionRoot $env:USERPROFILE\.codex\sessions
+```
+
+Watch for the next unique token event after steering an agent:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Measure-CodexSessionTokens.ps1 `
+  -SessionId <session-id> `
+  -Watch `
+  -Minutes 30 `
+  -IntervalSeconds 5 `
+  -Live `
+  -OutRoot .\runs\token-monitor
+```
+
+The monitor reports latest input, cached input, calculated uncached input, output, reasoning output, context-window pressure, rollout size, compacted-record count, recent large tool outputs, and a simple recommendation. Use `-Live` with `-Watch` for a console readout every poll while still saving JSON evidence. Repeated identical `token_count` events are de-duped so rate-limit/status re-emissions do not look like new turns.
+
+Thresholds:
+
+- `strong`: under `35,000` input tokens
+- `pass`: `35,000-59,999`
+- `warn`: `60,000-100,000`
+- `fail`: over `100,000`
+
+## Hook-Based Monitoring
+
+For ongoing work, use `Invoke-CodexTokenMonitorHook.ps1` as a Codex `Stop` hook. This records token usage after each completed turn without running a polling loop.
+
+The hook is intentionally small and non-blocking:
+
+- reads Codex hook JSON from stdin;
+- uses `transcript_path` to parse the local rollout;
+- appends one observation to `runs/token-monitor/hooks/events.jsonl`;
+- updates `runs/token-monitor/hooks/current.json` for dashboard-style reads;
+- logs hook failures to `runs/token-monitor/hooks/hook-errors.jsonl`;
+- always returns valid JSON with `continue=true`.
+
+Windows hook command example:
+
+```json
+{
+  "Stop": [
+    {
+      "type": "command",
+      "command": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\\Users\\rcarl\\L2-harness-memory-compressor\\Invoke-CodexTokenMonitorHook.ps1"
+    }
+  ]
+}
+```
+
+WSL hook command example when PowerShell is installed inside WSL and the repo is available there:
+
+```json
+{
+  "Stop": [
+    {
+      "type": "command",
+      "command": "pwsh -NoProfile -ExecutionPolicy Bypass -File /home/rcarl/L2-harness-memory-compressor/Invoke-CodexTokenMonitorHook.ps1"
+    }
+  ]
+}
+```
+
+Install the hook separately in each Codex environment that runs sessions. A Windows Codex session and a desktop WSL Codex session do not share the same hook process or local transcript path.
+
+References: [OpenAI Codex hooks](https://developers.openai.com/codex/hooks) and [JSON Lines](https://jsonlines.org/).
+
 ## Providers
 
 `codex` is the default standalone provider. It uses `codex exec` for chunk summarization, merge, and validation, so users do not need external provider credentials.
