@@ -1,0 +1,34 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Compressed Session Context",
+  "type": "object",
+  "required": [
+    "artifact_type",
+    "source_session_id",
+    "source_of_truth",
+    "current_state",
+    "major_decisions",
+    "active_work_items",
+    "open_risks",
+    "immediate_next_action",
+    "unresolved_gaps",
+    "handoff_recommendation",
+    "provider_summary"
+  ],
+  "properties": {
+    "artifact_type": { "const": "context" },
+    "source_session_id": { "type": "string" },
+    "replacement_session_name": { "type": "string" },
+    "fingerprint": { "type": "string" },
+    "source_of_truth": { "type": "object" },
+    "current_state": { "type": "object" },
+    "major_decisions": { "type": "array" },
+    "active_work_items": { "type": "array" },
+    "open_risks": { "type": "array" },
+    "immediate_next_action": { "type": "object" },
+    "unresolved_gaps": { "type": "array" },
+    "handoff_recommendation": { "type": "object" },
+    "provider_summary": { "type": "object" }
+  },
+  "additionalProperties": true
+}

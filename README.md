@@ -36,19 +36,33 @@ notepad .env
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Compress-CodexSession.ps1 `
   -SourcePath .\examples\sample-rollout.jsonl `
   -OutRoot .\runs `
-  -Provider minimax `
-  -EnvPath .\.env `
+  -Provider codex `
+  -CodexModel gpt-5.3-codex-spark `
+  -UseDigest `
   -DryRun
 ```
 
-Remove `-DryRun` after setting `MINIMAX_API_KEY`.
+Remove `-DryRun` when ready to spend Codex tokens. MiniMax and MiMo keys are not required for the default Codex-native path.
+
+## Official Conservative Workflow
+
+`compress-session` is the supported manual skill/SOP for this package. It creates a run evidence folder and `compressed-rollout.jsonl` from a source Codex rollout without touching live session files.
+
+- `codex` is the default standalone provider.
+- `minimax` is an optional accelerator/control when configured.
+- `mimo` is an optional fallback when configured.
+- Live rollout swaps are manual/advanced and require explicit approval outside the public entrypoint.
+- Next-turn token monitoring is planned as a separate tool.
 
 ## Inputs
 
 - `-SourcePath`: path to a Codex JSONL rollout.
 - `-OutRoot`: output folder for run evidence. Defaults to `.\runs`.
-- `-Provider`: `minimax` by default. `mimo` is available as fallback.
-- `-EnvPath`: `.env` file with provider keys.
+- `-Provider`: `codex` by default. `minimax` and `mimo` are optional external providers.
+- `-CodexModel`: Codex model for native summarization. Defaults to `gpt-5.3-codex-spark`.
+- `-CodexReasoningEffort`: `low` by default for extraction-style summarization. Some Codex profiles reject `minimal` when tools such as web search are enabled.
+- `-RetryFailedChunks`: reruns missing or invalid chunk summaries while skipping valid summaries.
+- `-EnvPath`: `.env` file with optional external provider keys.
 
 ## Outputs
 
@@ -67,11 +81,33 @@ Each run writes:
 - Live A/B rollout swaps are intentionally not part of the default path.
 - Native Codex `/compact` is separate and interactive; this tool is external evidence-first compression.
 
+## Done Definition
+
+A compression run is usable only when:
+
+- source rollout SHA is recorded before and after the run;
+- `run-manifest.json` exists;
+- `context.json` exists;
+- `compression_context_quality.json` exists and passes;
+- `compressed-rollout.jsonl` validates as exactly `session_meta`, `compacted`, `turn_context`;
+- the final report states session id, source size, provider/model, duration, chunk count, validation result, evidence folder, whether live rollout was touched, and next recommended action.
+
 ## Providers
 
-MiniMax is the default tested summarizer.
+`codex` is the default standalone provider. It uses `codex exec` for chunk summarization, merge, and validation, so users do not need external provider credentials.
 
-MiMo support remains available as a fallback path where credentials are configured. Other provider support should be added as explicit provider profiles with tests.
+`minimax` remains available as an optional accelerator/control where `MINIMAX_API_KEY` is configured.
+
+`mimo` remains available as a fallback path where credentials are configured. Other provider support should be added as explicit provider profiles with tests.
+
+To resume only failed Codex chunks:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Compress-CodexSession.ps1 `
+  -SourcePath <rollout.jsonl> `
+  -Provider codex `
+  -RetryFailedChunks
+```
 
 ## Tests
 
@@ -79,7 +115,7 @@ MiMo support remains available as a fallback path where credentials are configur
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\tests\Run-All.ps1
 ```
 
-Tests cover provider JSON extraction, dry-run provider config, chunk/final digest behavior, compressed rollout shape, no-BOM output, and the public entrypoint.
+Tests cover provider JSON extraction, Codex dry-run provider flow, dry-run external provider config, chunk/final digest behavior, compressed rollout shape, no-BOM output, and the public entrypoint.
 
 ## Benchmark Details
 

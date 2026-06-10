@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Compression Context Quality",
+  "type": "object",
+  "required": ["passed", "checked_at", "errors", "warnings"],
+  "properties": {
+    "passed": { "type": "boolean" },
+    "checked_at": { "type": "string" },
+    "errors": { "type": "array", "items": { "type": "string" } },
+    "warnings": { "type": "array", "items": { "type": "string" } }
+  },
+  "additionalProperties": false
+}

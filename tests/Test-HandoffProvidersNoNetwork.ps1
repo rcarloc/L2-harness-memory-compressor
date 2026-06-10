@@ -130,6 +130,25 @@ try {
     Assert-True ($glmValidation.skipped -eq $true) 'GLM validation should be skipped without policy-safe opt-in'
     Assert-True ($glmValidation.launch_allowed -eq $false) 'GLM validation must keep launch disabled'
 
+    & (Join-Path $RepoRoot 'Invoke-Handoff.ps1') `
+        -Mode SummarizeCodex `
+        -Role PM `
+        -SessionId $sessionId `
+        -Fingerprint DRY `
+        -OutRoot $testRoot `
+        -Model gpt-5.3-codex-spark `
+        -ReasoningEffort low `
+        -ChunkIndex 1 `
+        -DryRun `
+        -Force `
+        -NoLaunch | Out-Null
+
+    $codexSummaryPath = Join-Path $bundle 'chunk_summaries\codex\chunk_001.summary.json'
+    Assert-True (Test-Path -LiteralPath $codexSummaryPath) 'Codex dry-run chunk summary should be written'
+    $codexSummary = Read-JsonFile $codexSummaryPath
+    Assert-True ($codexSummary.provider -eq 'codex') 'Codex chunk summary should identify provider'
+    Assert-True ($codexSummary.model -eq 'gpt-5.3-codex-spark') 'Codex chunk summary should identify model'
+
     $runFile = Get-ChildItem -LiteralPath (Join-Path $bundle 'provider_runs\minimax_m3') -Filter '*chunk_001.json' | Select-Object -First 1
     Assert-True ($null -ne $runFile) 'MiniMax provider run artifact should exist'
     $artifactText = Get-Content -LiteralPath $runFile.FullName -Raw

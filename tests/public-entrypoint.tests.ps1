@@ -24,14 +24,14 @@ try {
         '{"timestamp":"2026-06-09T00:00:02.000Z","type":"event_msg","payload":{"type":"agent_message","message":"Final state: public packaging complete. Next action: run tests.","phase":"final"}}',
         '{"timestamp":"2026-06-09T00:00:03.000Z","type":"turn_context","payload":{"turn_id":"turn-public-test","cwd":"C:\\demo","model":"gpt-5","summary":"sample turn"}}'
     ) | Set-Content -LiteralPath $source -Encoding UTF8
-    @('MINIMAX_API_KEY=dummy-minimax-secret') | Set-Content -LiteralPath $envPath -Encoding UTF8
-
     & (Join-Path $RepoRoot 'Compress-CodexSession.ps1') `
         -SourcePath $source `
         -OutRoot $outRoot `
-        -Provider minimax `
+        -Provider codex `
         -EnvPath $envPath `
-        -DryRun | Out-Null
+        -DryRun `
+        -UseDigest `
+        -RetryFailedChunks | Out-Null
 
     $runDirs = @(Get-ChildItem -LiteralPath $outRoot -Directory)
     Assert-True ($runDirs.Count -eq 1) 'Wrapper should create exactly one run directory'
@@ -58,6 +58,10 @@ try {
     $manifest = Get-Content -LiteralPath (Join-Path $runDirs[0].FullName 'run-manifest.json') -Raw | ConvertFrom-Json
     Assert-True (-not [string]::IsNullOrWhiteSpace([string]$manifest.source.sha256)) 'Run manifest should record source SHA'
     Assert-True ($manifest.outputs.compressed_rollout -eq 'compressed-rollout.jsonl') 'Run manifest should point to compressed rollout'
+    Assert-True ($manifest.provider -eq 'codex') 'Run manifest should record codex provider'
+    Assert-True ($manifest.codex_model -eq 'gpt-5.3-codex-spark') 'Run manifest should record Codex model'
+    Assert-True ($manifest.codex_reasoning_effort -eq 'low') 'Run manifest should record Codex reasoning effort'
+    Assert-True ($manifest.retry_failed_chunks -eq $true) 'Run manifest should record retry_failed_chunks'
 
     $oldMiniMax = [Environment]::GetEnvironmentVariable('MINIMAX_API_KEY')
     $oldMiniMaxProcess = $env:MINIMAX_API_KEY

@@ -6,6 +6,7 @@ $tests = @(
     'chunk-digest.tests.ps1',
     'final-state-digest.tests.ps1',
     'Test-HandoffProvidersNoNetwork.ps1',
+    'codex-provider-dryrun.tests.ps1',
     'rollout-shape.tests.ps1',
     'public-entrypoint.tests.ps1'
 )
