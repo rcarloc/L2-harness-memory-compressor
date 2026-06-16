@@ -2,21 +2,35 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$SourcePath,
 
-    [string]$OutRoot = (Join-Path $PSScriptRoot 'runs'),
+    [string]$OutRoot = '',
 
-    [ValidateSet('minimax', 'mimo')]
-    [string]$Provider = 'minimax',
+    [ValidateSet('codex', 'minimax', 'mimo')]
+    [string]$Provider = 'codex',
 
-    [string]$EnvPath = (Join-Path $PSScriptRoot '.env'),
+    [string]$CodexModel = 'gpt-5.3-codex-spark',
+
+    [ValidateSet('minimal', 'low', 'medium')]
+    [string]$CodexReasoningEffort = 'low',
+
+    [string]$EnvPath = '',
 
     [int]$MaxTokens = 5000,
     [int]$ThrottleLimit = 1,
     [switch]$UseDigest,
     [switch]$DryRun,
-    [switch]$Force
+    [switch]$Force,
+    [switch]$RetryFailedChunks
 )
 
 $ErrorActionPreference = 'Stop'
+$ScriptRoot = if (-not [string]::IsNullOrWhiteSpace($PSScriptRoot)) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
+
+if ([string]::IsNullOrWhiteSpace($OutRoot)) {
+    $OutRoot = Join-Path $ScriptRoot 'runs'
+}
+if ([string]::IsNullOrWhiteSpace($EnvPath)) {
+    $EnvPath = Join-Path $ScriptRoot '.env'
+}
 
 if (-not (Test-Path -LiteralPath $SourcePath)) {
     throw "Source rollout not found: $SourcePath"
@@ -50,7 +64,7 @@ $bundlePath = Join-Path (Join-Path $handoffOutRoot $role) $fingerprint
 
 New-Item -ItemType Directory -Path $runDir -Force | Out-Null
 
-$envConfig = & (Join-Path $PSScriptRoot 'src\Read-HandoffEnv.ps1') -EnvPath $EnvPath
+$envConfig = & (Join-Path $ScriptRoot 'src\Read-HandoffEnv.ps1') -EnvPath $EnvPath
 if (-not $DryRun) {
     if ($Provider -eq 'minimax' -and -not $envConfig.providers.minimax.api_key_present) {
         throw 'MINIMAX_API_KEY is required for provider minimax. Set it in process env or .env, or rerun with -DryRun.'
@@ -68,12 +82,23 @@ $common = @{
     NoLaunch = $true
 }
 
-& (Join-Path $PSScriptRoot 'Invoke-Handoff.ps1') @common -Mode Chunk -SourcePath $resolvedSource | Out-Null
-& (Join-Path $PSScriptRoot 'Invoke-Handoff.ps1') @common -Mode Digest | Out-Null
-& (Join-Path $PSScriptRoot 'Invoke-Handoff.ps1') @common -Mode FinalState | Out-Null
+& (Join-Path $ScriptRoot 'Invoke-Handoff.ps1') @common -Mode Chunk -SourcePath $resolvedSource | Out-Null
+& (Join-Path $ScriptRoot 'Invoke-Handoff.ps1') @common -Mode Digest | Out-Null
+& (Join-Path $ScriptRoot 'Invoke-Handoff.ps1') @common -Mode FinalState | Out-Null
 
-if ($Provider -eq 'minimax') {
-    & (Join-Path $PSScriptRoot 'Invoke-Handoff.ps1') @common `
+if ($Provider -eq 'codex') {
+    & (Join-Path $ScriptRoot 'Invoke-Handoff.ps1') @common `
+        -Mode SummarizeCodex `
+        -Model $CodexModel `
+        -ReasoningEffort $CodexReasoningEffort `
+        -MaxTokens $MaxTokens `
+        -ThrottleLimit $ThrottleLimit `
+        -UseDigest:$UseDigest `
+        -DryRun:$DryRun `
+        -Force:$Force `
+        -RetryFailedChunks:$RetryFailedChunks | Out-Null
+} elseif ($Provider -eq 'minimax') {
+    & (Join-Path $ScriptRoot 'Invoke-Handoff.ps1') @common `
         -Mode SummarizeMiniMax `
         -EnvPath $EnvPath `
         -MaxTokens $MaxTokens `
@@ -82,7 +107,7 @@ if ($Provider -eq 'minimax') {
         -DryRun:$DryRun `
         -Force:$Force | Out-Null
 } else {
-    & (Join-Path $PSScriptRoot 'Invoke-Handoff.ps1') @common `
+    & (Join-Path $ScriptRoot 'Invoke-Handoff.ps1') @common `
         -Mode SummarizeMiMo `
         -EnvPath $EnvPath `
         -MaxTokens $MaxTokens `
@@ -92,17 +117,31 @@ if ($Provider -eq 'minimax') {
         -Force:$Force | Out-Null
 }
 
-& (Join-Path $PSScriptRoot 'Invoke-Handoff.ps1') @common -Mode MergeHierarchical -EnvPath $EnvPath -DryRun:$DryRun -Force:$Force | Out-Null
-& (Join-Path $PSScriptRoot 'Invoke-Handoff.ps1') @common -Mode ValidateContextQuality | Out-Null
+if ($Provider -eq 'codex') {
+    & (Join-Path $ScriptRoot 'Invoke-Handoff.ps1') @common `
+        -Mode MergeCodex `
+        -Model $CodexModel `
+        -ReasoningEffort $CodexReasoningEffort `
+        -DryRun:$DryRun `
+        -Force:$Force | Out-Null
+    & (Join-Path $ScriptRoot 'Invoke-Handoff.ps1') @common `
+        -Mode ValidateCodex `
+        -Model $CodexModel `
+        -ReasoningEffort $CodexReasoningEffort `
+        -DryRun:$DryRun | Out-Null
+} else {
+    & (Join-Path $ScriptRoot 'Invoke-Handoff.ps1') @common -Mode MergeHierarchical -EnvPath $EnvPath -DryRun:$DryRun -Force:$Force | Out-Null
+    & (Join-Path $ScriptRoot 'Invoke-Handoff.ps1') @common -Mode ValidateContextQuality | Out-Null
+}
 
 $compressedPath = Join-Path $runDir 'compressed-rollout.jsonl'
-$rolloutResult = & (Join-Path $PSScriptRoot 'src\New-CompressedRollout.ps1') `
+$rolloutResult = & (Join-Path $ScriptRoot 'src\New-CompressedRollout.ps1') `
     -SourcePath $resolvedSource `
     -BundlePath $bundlePath `
     -OutputPath $compressedPath `
     -RunId $runId
 
-$validation = & (Join-Path $PSScriptRoot 'src\Test-CompressedRollout.ps1') -Path $compressedPath
+$validation = & (Join-Path $ScriptRoot 'src\Test-CompressedRollout.ps1') -Path $compressedPath
 
 $sourceHashAfter = (Get-FileHash -LiteralPath $resolvedSource -Algorithm SHA256).Hash.ToLowerInvariant()
 if ($sourceHashAfter -ne $sourceHashBefore) {
@@ -113,6 +152,9 @@ $manifest = [ordered]@{
     artifact_type = 'l2_compression_run_manifest'
     run_id = $runId
     provider = $Provider
+    codex_model = if ($Provider -eq 'codex') { $CodexModel } else { $null }
+    codex_reasoning_effort = if ($Provider -eq 'codex') { $CodexReasoningEffort } else { $null }
+    retry_failed_chunks = [bool]$RetryFailedChunks
     dry_run = [bool]$DryRun
     source = [ordered]@{
         path = $resolvedSource
@@ -132,13 +174,16 @@ $manifest = [ordered]@{
     }
     created_at = (Get-Date).ToUniversalTime().ToString('o')
 }
-& (Join-Path $PSScriptRoot 'src\Write-Utf8NoBom.ps1') -Path (Join-Path $runDir 'run-manifest.json') -InputObject $manifest -Depth 30 | Out-Null
+& (Join-Path $ScriptRoot 'src\Write-Utf8NoBom.ps1') -Path (Join-Path $runDir 'run-manifest.json') -InputObject $manifest -Depth 30 | Out-Null
 
 [pscustomobject]@{
     run_id = $runId
     run_dir = $runDir
     session_id = $sessionId
     provider = $Provider
+    codex_model = if ($Provider -eq 'codex') { $CodexModel } else { $null }
+    codex_reasoning_effort = if ($Provider -eq 'codex') { $CodexReasoningEffort } else { $null }
+    retry_failed_chunks = [bool]$RetryFailedChunks
     dry_run = [bool]$DryRun
     source_sha256 = $sourceHashBefore
     compressed_rollout = $compressedPath

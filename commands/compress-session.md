@@ -10,19 +10,19 @@ The user invoked this command with: `$ARGUMENTS`
 
 ## Status
 
-This file is a slash-command spec/staging artifact. It is not currently installed as a built-in Codex CLI command.
+This file is a slash-command spec/staging artifact. It is not currently installed as a built-in Codex CLI command and the examples below are for future slash-command wiring.
 
 Known distinction:
 
 - Built-in Codex CLI interactive command: `/compact`
 - This manual external workflow: `compress-session`
 
-Use this file to wire a future slash command, or invoke the skill directly by asking Codex to "use compress-session."
+Use this file to wire a future slash command, or invoke the official natural-language skill directly by asking Codex to "use compress-session."
 
 ## Instructions
 
-1. Run the public entrypoint:
-   `.\Compress-CodexSession.ps1 -SourcePath <rollout.jsonl> -OutRoot .\runs -Provider minimax -EnvPath .\.env`
+1. Run the public entrypoint from the repository root:
+   `.\Compress-CodexSession.ps1 -SourcePath <rollout.jsonl> -OutRoot .\runs -Provider codex -CodexModel gpt-5.3-codex-spark -UseDigest`
 
 2. Keep the default conservative behavior.
 
@@ -32,6 +32,11 @@ Use this file to wire a future slash command, or invoke the skill directly by as
    - validate `context.json`;
    - build compressed rollout evidence;
    - do not live-swap unless the user supplied `--ab-test` or explicitly confirms.
+
+   Provider policy:
+   - `codex` = default standalone provider.
+   - `minimax` = optional accelerator/control when credentials are configured.
+   - `mimo` = optional fallback when credentials are configured.
 
 4. If the argument is `current`, identify the current session id and live rollout path before proceeding.
 

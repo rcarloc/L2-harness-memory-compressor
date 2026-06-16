@@ -1,0 +1,143 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Codex Chunk Summary",
+  "type": "object",
+  "required": [
+    "artifact_type",
+    "provider",
+    "model",
+    "reasoning_effort",
+    "mode",
+    "chunk_index",
+    "source",
+    "facts",
+    "decisions",
+    "files",
+    "commands",
+    "failures",
+    "next_steps",
+    "user_preferences",
+    "final_state_candidates",
+    "unresolved_gaps"
+  ],
+  "properties": {
+    "artifact_type": { "type": "string" },
+    "provider": { "type": "string" },
+    "model": { "type": "string" },
+    "reasoning_effort": { "type": "string" },
+    "mode": { "type": "string" },
+    "chunk_index": { "type": "integer" },
+    "source": {
+      "type": "object",
+      "required": ["chunk_path", "first_source_line", "last_source_line", "first_timestamp", "last_timestamp"],
+      "properties": {
+        "chunk_path": { "type": "string" },
+        "first_source_line": { "type": "integer" },
+        "last_source_line": { "type": "integer" },
+        "first_timestamp": { "type": "string" },
+        "last_timestamp": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "facts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["text", "lines"],
+        "properties": {
+          "text": { "type": "string" },
+          "lines": { "type": "array", "items": { "type": "integer" } }
+        },
+        "additionalProperties": false
+      }
+    },
+    "decisions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["text", "lines"],
+        "properties": {
+          "text": { "type": "string" },
+          "lines": { "type": "array", "items": { "type": "integer" } }
+        },
+        "additionalProperties": false
+      }
+    },
+    "files": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["path_or_name", "action", "lines"],
+        "properties": {
+          "path_or_name": { "type": "string" },
+          "action": { "type": "string" },
+          "lines": { "type": "array", "items": { "type": "integer" } }
+        },
+        "additionalProperties": false
+      }
+    },
+    "commands": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["text", "result", "lines"],
+        "properties": {
+          "text": { "type": "string" },
+          "result": { "type": "string" },
+          "lines": { "type": "array", "items": { "type": "integer" } }
+        },
+        "additionalProperties": false
+      }
+    },
+    "failures": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["text", "lines"],
+        "properties": {
+          "text": { "type": "string" },
+          "lines": { "type": "array", "items": { "type": "integer" } }
+        },
+        "additionalProperties": false
+      }
+    },
+    "next_steps": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["text", "lines"],
+        "properties": {
+          "text": { "type": "string" },
+          "lines": { "type": "array", "items": { "type": "integer" } }
+        },
+        "additionalProperties": false
+      }
+    },
+    "user_preferences": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["text", "lines"],
+        "properties": {
+          "text": { "type": "string" },
+          "lines": { "type": "array", "items": { "type": "integer" } }
+        },
+        "additionalProperties": false
+      }
+    },
+    "final_state_candidates": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["text", "lines"],
+        "properties": {
+          "text": { "type": "string" },
+          "lines": { "type": "array", "items": { "type": "integer" } }
+        },
+        "additionalProperties": false
+      }
+    },
+    "unresolved_gaps": { "type": "array", "items": { "type": "string" } }
+  },
+  "additionalProperties": false
+}

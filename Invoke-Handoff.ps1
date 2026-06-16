@@ -1,5 +1,5 @@
 param(
-    [ValidateSet('Checkpoint', 'Chunk', 'Digest', 'FinalState', 'CheapTest', 'Summarize', 'SummarizeMiniMax', 'SummarizeMiMo', 'MergeMiniMax', 'MergeHierarchical', 'ValidateGLM', 'ValidateMiniMax', 'ValidateContextQuality', 'Validate', 'PrepareLaunch', 'RecordLaunch', 'Handoff')]
+    [ValidateSet('Checkpoint', 'Chunk', 'Digest', 'FinalState', 'CheapTest', 'Summarize', 'SummarizeMiniMax', 'SummarizeMiMo', 'SummarizeCodex', 'MergeMiniMax', 'MergeHierarchical', 'MergeCodex', 'ValidateGLM', 'ValidateMiniMax', 'ValidateContextQuality', 'ValidateCodex', 'Validate', 'PrepareLaunch', 'RecordLaunch', 'Handoff')]
     [string]$Mode = 'Checkpoint',
 
     [Parameter(Mandatory = $true)]
@@ -12,11 +12,11 @@ param(
     [string]$Fingerprint,
 
     [string]$SourcePath,
-    [string]$OutRoot = (Join-Path $PSScriptRoot 'runs'),
+    [string]$OutRoot = '',
     [string]$ReplacementSessionName,
     [string]$Model = 'MiniMax-M3',
     [string]$ReasoningEffort = 'provider_default',
-    [string]$EnvPath = (Join-Path $PSScriptRoot '.env'),
+    [string]$EnvPath = '',
     [int]$ChunkLimit = 0,
     [int[]]$ChunkIndex,
     [int]$StartChunk = 0,
@@ -29,6 +29,7 @@ param(
     [switch]$DryRun,
     [switch]$Force,
     [switch]$UseDigest,
+    [switch]$RetryFailedChunks,
     [switch]$ApproveLaunch,
     [string]$ReplacementThreadId,
     [string]$ReplacementThreadName,
@@ -37,6 +38,14 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+$ScriptRoot = if (-not [string]::IsNullOrWhiteSpace($PSScriptRoot)) { $PSScriptRoot } else { Split-Path -Parent $MyInvocation.MyCommand.Path }
+if ([string]::IsNullOrWhiteSpace($OutRoot)) {
+    $OutRoot = Join-Path $ScriptRoot 'runs'
+}
+if ([string]::IsNullOrWhiteSpace($EnvPath)) {
+    $EnvPath = Join-Path $ScriptRoot '.env'
+}
+
 $isCheapTest = ($Model -eq 'cheap-test' -or $Model -eq 'model-free' -or $Model -eq 'none')
 
 if (-not $ReplacementSessionName) {
@@ -48,9 +57,12 @@ $bundlePath = Join-Path $OutRoot (Join-Path $Role $Fingerprint)
 New-Item -ItemType Directory -Path $bundlePath -Force | Out-Null
 
 $isModelFreeSetup = ($Mode -eq 'CheapTest' -or $Mode -eq 'Chunk')
-$effectiveModel = if ($isModelFreeSetup) { 'none' } else { $Model }
-$effectiveEffort = if ($isModelFreeSetup) { 'none' } else { $ReasoningEffort }
-$effectiveModelProfile = if ($Mode -eq 'Chunk') { 'chunking' } elseif ($Mode -eq 'CheapTest') { 'cheap-test' } elseif ($Mode -like '*MiniMax*') { 'minimax-m3' } elseif ($Mode -like '*MiMo*') { 'mimo-v2.5-pro' } else { 'provider-default' }
+$isCodexMode = ($Mode -like '*Codex*')
+$codexModel = if ($isCodexMode -and $Model -eq 'MiniMax-M3') { 'gpt-5.3-codex-spark' } else { $Model }
+$codexReasoningEffort = if ($ReasoningEffort -in @('minimal', 'low', 'medium')) { $ReasoningEffort } else { 'low' }
+$effectiveModel = if ($isModelFreeSetup) { 'none' } elseif ($isCodexMode) { $codexModel } else { $Model }
+$effectiveEffort = if ($isModelFreeSetup) { 'none' } elseif ($isCodexMode) { $codexReasoningEffort } else { $ReasoningEffort }
+$effectiveModelProfile = if ($Mode -eq 'Chunk') { 'chunking' } elseif ($Mode -eq 'CheapTest') { 'cheap-test' } elseif ($Mode -like '*MiniMax*') { 'minimax-m3' } elseif ($Mode -like '*MiMo*') { 'mimo-v2.5-pro' } elseif ($Mode -like '*Codex*') { 'codex' } else { 'provider-default' }
 
 $modelConfig = [ordered]@{
     model = $effectiveModel
@@ -65,7 +77,7 @@ if ($Mode -in @('Checkpoint', 'Chunk', 'CheapTest', 'Summarize', 'Handoff') -and
 }
 
 if ($Mode -in @('Checkpoint', 'Chunk', 'CheapTest', 'Summarize', 'Handoff')) {
-    & (Join-Path $PSScriptRoot 'src\New-Checkpoint.ps1') `
+    & (Join-Path $ScriptRoot 'src\New-Checkpoint.ps1') `
         -SourcePath $SourcePath `
         -BundlePath $bundlePath `
         -SessionId $SessionId `
@@ -78,7 +90,7 @@ if ($Mode -in @('Checkpoint', 'Chunk', 'CheapTest', 'Summarize', 'Handoff')) {
 }
 
 if ($Mode -eq 'Chunk') {
-    & (Join-Path $PSScriptRoot 'src\Invoke-CheapSemanticSummary.ps1') `
+    & (Join-Path $ScriptRoot 'src\Invoke-CheapSemanticSummary.ps1') `
         -BundlePath $bundlePath `
         -SessionId $SessionId `
         -Role $Role `
@@ -91,17 +103,17 @@ if ($Mode -eq 'Chunk') {
 }
 
 if ($Mode -eq 'Digest') {
-    & (Join-Path $PSScriptRoot 'src\New-ChunkDigest.ps1') `
+    & (Join-Path $ScriptRoot 'src\New-ChunkDigest.ps1') `
         -BundlePath $bundlePath | Out-Null
 }
 
 if ($Mode -eq 'FinalState') {
-    & (Join-Path $PSScriptRoot 'src\New-FinalStateDigest.ps1') `
+    & (Join-Path $ScriptRoot 'src\New-FinalStateDigest.ps1') `
         -BundlePath $bundlePath | Out-Null
 }
 
 if ($Mode -eq 'CheapTest') {
-    & (Join-Path $PSScriptRoot 'src\Invoke-CheapSemanticSummary.ps1') `
+    & (Join-Path $ScriptRoot 'src\Invoke-CheapSemanticSummary.ps1') `
         -BundlePath $bundlePath `
         -SessionId $SessionId `
         -Role $Role `
@@ -112,12 +124,12 @@ if ($Mode -eq 'CheapTest') {
         -ReportTitle 'Handoff Cheap-Test Report' `
         -ReportStatus 'MODEL_FREE_CHEAP_TEST' | Out-Null
 
-    & (Join-Path $PSScriptRoot 'src\Test-CheapTestValidation.ps1') `
+    & (Join-Path $ScriptRoot 'src\Test-CheapTestValidation.ps1') `
         -BundlePath $bundlePath | Out-Null
 }
 
 if ($Mode -eq 'SummarizeMiniMax') {
-    & (Join-Path $PSScriptRoot 'src\Invoke-MiniMaxChunkSummary.ps1') `
+    & (Join-Path $ScriptRoot 'src\Invoke-MiniMaxChunkSummary.ps1') `
         -BundlePath $bundlePath `
         -EnvPath $EnvPath `
         -ChunkLimit $ChunkLimit `
@@ -130,7 +142,7 @@ if ($Mode -eq 'SummarizeMiniMax') {
 }
 
 if ($Mode -eq 'SummarizeMiMo') {
-    & (Join-Path $PSScriptRoot 'src\Invoke-MiMoChunkSummary.ps1') `
+    & (Join-Path $ScriptRoot 'src\Invoke-MiMoChunkSummary.ps1') `
         -BundlePath $bundlePath `
         -EnvPath $EnvPath `
         -ChunkLimit $ChunkLimit `
@@ -144,8 +156,22 @@ if ($Mode -eq 'SummarizeMiMo') {
         -Force:$Force | Out-Null
 }
 
+if ($Mode -eq 'SummarizeCodex') {
+    & (Join-Path $ScriptRoot 'src\Invoke-CodexChunkSummary.ps1') `
+        -BundlePath $bundlePath `
+        -Model $codexModel `
+        -ReasoningEffort $codexReasoningEffort `
+        -ChunkLimit $ChunkLimit `
+        -ChunkIndex $ChunkIndex `
+        -ThrottleLimit $ThrottleLimit `
+        -UseDigest:$UseDigest `
+        -DryRun:$DryRun `
+        -Force:$Force `
+        -RetryFailedChunks:$RetryFailedChunks | Out-Null
+}
+
 if ($Mode -eq 'MergeMiniMax') {
-    & (Join-Path $PSScriptRoot 'src\Merge-MiniMaxSummaries.ps1') `
+    & (Join-Path $ScriptRoot 'src\Merge-MiniMaxSummaries.ps1') `
         -BundlePath $bundlePath `
         -EnvPath $EnvPath `
         -DryRun:$DryRun `
@@ -153,27 +179,44 @@ if ($Mode -eq 'MergeMiniMax') {
 }
 
 if ($Mode -eq 'MergeHierarchical') {
-    & (Join-Path $PSScriptRoot 'src\Merge-ContextHierarchical.ps1') `
+    & (Join-Path $ScriptRoot 'src\Merge-ContextHierarchical.ps1') `
         -BundlePath $bundlePath `
         -EnvPath $EnvPath `
         -DryRun:$DryRun `
         -Force:$Force | Out-Null
 }
 
+if ($Mode -eq 'MergeCodex') {
+    & (Join-Path $ScriptRoot 'src\Merge-CodexSummaries.ps1') `
+        -BundlePath $bundlePath `
+        -Model $codexModel `
+        -ReasoningEffort $codexReasoningEffort `
+        -DryRun:$DryRun `
+        -Force:$Force | Out-Null
+}
+
 if ($Mode -eq 'ValidateContextQuality') {
-    & (Join-Path $PSScriptRoot 'src\Test-CompressionContextQuality.ps1') `
+    & (Join-Path $ScriptRoot 'src\Test-CompressionContextQuality.ps1') `
         -BundlePath $bundlePath | Out-Null
 }
 
+if ($Mode -eq 'ValidateCodex') {
+    & (Join-Path $ScriptRoot 'src\Invoke-CodexContextValidation.ps1') `
+        -BundlePath $bundlePath `
+        -Model $codexModel `
+        -ReasoningEffort $codexReasoningEffort `
+        -DryRun:$DryRun | Out-Null
+}
+
 if ($Mode -eq 'ValidateGLM') {
-    & (Join-Path $PSScriptRoot 'src\Invoke-GlmValidation.ps1') `
+    & (Join-Path $ScriptRoot 'src\Invoke-GlmValidation.ps1') `
         -BundlePath $bundlePath `
         -EnvPath $EnvPath `
         -DryRun:$DryRun | Out-Null
 }
 
 if ($Mode -eq 'ValidateMiniMax') {
-    & (Join-Path $PSScriptRoot 'src\Invoke-MiniMaxValidation.ps1') `
+    & (Join-Path $ScriptRoot 'src\Invoke-MiniMaxValidation.ps1') `
         -BundlePath $bundlePath `
         -EnvPath $EnvPath `
         -DryRun:$DryRun | Out-Null
@@ -184,7 +227,7 @@ if ($Mode -eq 'PrepareLaunch') {
         throw 'PrepareLaunch is metadata-only in V1 and requires -NoLaunch.'
     }
 
-    & (Join-Path $PSScriptRoot 'src\Invoke-Handoff.PrepareLaunch.ps1') `
+    & (Join-Path $ScriptRoot 'src\Invoke-Handoff.PrepareLaunch.ps1') `
         -Role $Role `
         -SessionId $SessionId `
         -Fingerprint $Fingerprint `
@@ -193,7 +236,7 @@ if ($Mode -eq 'PrepareLaunch') {
 }
 
 if ($Mode -eq 'RecordLaunch') {
-    & (Join-Path $PSScriptRoot 'src\Invoke-Handoff.RecordLaunch.ps1') `
+    & (Join-Path $ScriptRoot 'src\Invoke-Handoff.RecordLaunch.ps1') `
         -Role $Role `
         -SessionId $SessionId `
         -Fingerprint $Fingerprint `
@@ -206,7 +249,7 @@ if ($Mode -eq 'RecordLaunch') {
 
 if ($Mode -in @('Summarize', 'Handoff')) {
     if ($isCheapTest) {
-        & (Join-Path $PSScriptRoot 'src\Invoke-CheapSemanticSummary.ps1') `
+        & (Join-Path $ScriptRoot 'src\Invoke-CheapSemanticSummary.ps1') `
             -BundlePath $bundlePath `
             -SessionId $SessionId `
             -Role $Role `
@@ -220,7 +263,7 @@ if ($Mode -in @('Summarize', 'Handoff')) {
 
 if ($Mode -in @('Validate', 'Handoff')) {
     if (Test-Path -LiteralPath (Join-Path $bundlePath 'context.model.json')) {
-        & (Join-Path $PSScriptRoot 'src\Normalize-Context.ps1') `
+        & (Join-Path $ScriptRoot 'src\Normalize-Context.ps1') `
             -BundlePath $bundlePath `
             -SessionId $SessionId `
             -Role $Role `
@@ -228,7 +271,7 @@ if ($Mode -in @('Validate', 'Handoff')) {
             -ReplacementSessionName $ReplacementSessionName | Out-Null
     }
 
-    & (Join-Path $PSScriptRoot 'src\Test-HandoffValidation.ps1') `
+    & (Join-Path $ScriptRoot 'src\Test-HandoffValidation.ps1') `
         -BundlePath $bundlePath `
         -RequireLaunchAllowed:($Mode -eq 'Handoff' -and -not $NoLaunch) | Out-Null
 }

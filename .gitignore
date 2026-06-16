@@ -9,6 +9,7 @@ transcripts/
 provider_runs/
 evidence/
 artifacts/
+benchmarks/
 
 *.log
 *.tmp
